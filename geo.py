@@ -3,7 +3,7 @@ import requests
 # Toggle these to False to deterministically test the fallback/failure paths,
 # per the brief's requirement: "mock the geo providers when you prove the fallback."
 PROVIDER_A_ENABLED = False
-PROVIDER_B_ENABLED = False
+PROVIDER_B_ENABLED = True
 
 
 def _provider_a(ip: str) -> dict | None:

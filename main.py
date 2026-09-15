@@ -2,6 +2,7 @@ import time
 from collections import defaultdict, deque
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 from repository import init_db, get_widget_by_id, insert_submission
 from geo import enrich_ip
@@ -61,6 +62,17 @@ def health():
     return {"status": "ok"}
 
 
+def validate_data_against_fields(data: dict, fields) -> None:
+    allowed = {f["name"] for f in fields}
+    required = {f["name"] for f in fields if f.get("required")}
+    unknown = set(data) - allowed
+    missing = required - set(data)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"Unknown fields: {sorted(unknown)}")
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing required fields: {sorted(missing)}")
+
+
 @app.post("/submissions", status_code=201, summary="Public, cross-origin submission endpoint")
 def create_submission(payload: SubmissionPayload, request: Request):
     client_ip = request.client.host if request.client else "unknown"
@@ -72,7 +84,11 @@ def create_submission(payload: SubmissionPayload, request: Request):
     if widget is None:
         raise HTTPException(status_code=400, detail=f"Widget {payload.widget_id} does not exist")
 
-    is_spam = bool(payload.website.strip())
+    if payload.website.strip():
+        # Honeypot filled = bot. Return success but store nothing.
+        return JSONResponse(status_code=200, content={"status": "ok", "spam_flag": True})
+
+    validate_data_against_fields(payload.data, widget["fields"])
 
     geo = enrich_ip(client_ip)
 
@@ -83,7 +99,7 @@ def create_submission(payload: SubmissionPayload, request: Request):
         ip=client_ip,
         country=geo["country"],
         city=geo["city"],
-        spam_flag=is_spam,
+        spam_flag=False,
     )
 
     try:
@@ -94,6 +110,6 @@ def create_submission(payload: SubmissionPayload, request: Request):
     return {
         "id": result["id"],
         "created_at": result["created_at"].isoformat(),
-        "spam_flag": is_spam,
+        "spam_flag": False,
         "geo": geo,
     }

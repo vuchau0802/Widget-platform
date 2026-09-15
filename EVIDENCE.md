@@ -4,13 +4,29 @@
 
 **Cross-origin submission stores an enriched row (Phase 2 gate):**
 ```
-PS> Invoke-WebRequest -Uri http://localhost:8003/submissions -Method POST `
-    -Body '{"widget_id": 1, "data": {"email": "visitor@example.com"}}' `
-    -ContentType "application/json" -Headers @{Origin="http://some-other-site.com"}
+PS> Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8003/submissions -Method POST -Body '{"widget_id": 1, "data": {"email": "visitor@example.com"}}' -ContentType "application/json" -Headers @{Origin="http://some-other-site.com"}
 
-StatusCode: 201
-Headers: access-control-allow-origin: *
-Content: {"id":1,"created_at":"2026-09-15T02:38:33...","spam_flag":false,"geo":{"country":"Testland","city":"Localhost"}}
+
+StatusCode        : 201
+StatusDescription : Created
+Content           : {"id":1,"created_at":"2026-09-15T02:38:33.424039+00:00","spam_flag":false,"geo":{"country":"Testlan
+                    d","city":"Localhost"}}
+RawContent        : HTTP/1.1 201 Created
+                    access-control-allow-origin: *
+                    Content-Length: 122
+                    Content-Type: application/json
+                    Date: Tue, 15 Sep 2026 02:38:33 GMT
+                    Server: uvicorn
+
+                    {"id":1,"created_at":"2026-09-15T02:3...
+Forms             :
+Headers           : {[access-control-allow-origin, *], [Content-Length, 122], [Content-Type, application/json], [Date,
+                    Tue, 15 Sep 2026 02:38:33 GMT]...}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 122
 ```
 The `access-control-allow-origin: *` response header confirms a real browser on any origin would be permitted to read this response — not just that the server-side call succeeded.
 
@@ -19,13 +35,40 @@ The `access-control-allow-origin: *` response header confirms a real browser on 
 **Rate limiting (5 requests/10s window):**
 ```
 6 rapid requests fired. Requests 1-5: 201 Created. Request 6: 429 {"detail":"Too many requests. Please slow down."}
+
+Invoke-WebRequest : {"detail":"Too many requests. Please slow down."}
+At line:1 char:25
++ ... ch-Object { Invoke-WebRequest -UseBasicParsing -Uri http://localhost: ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-WebRequest], WebExc
+   eption
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
 ```
 
 **Honeypot spam control:**
 ```
-PS> ... -Body '{"widget_id": 1, "data": {"email": "bot@spam.com"}, "website": "http://spam.com"}'
-StatusCode: 201
-Content: {"id":7, ..., "spam_flag":true, ...}
+PS> Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8003/submissions -Method POST -Body '{"widget_id": 1, "data": {"email": "bot@spam.com"}, "website": "http://spam.com"}' -ContentType "application/json"
+
+
+StatusCode        : 201
+StatusDescription : Created
+Content           : {"id":7,"created_at":"2026-09-15T02:41:14.232015+00:00","spam_flag":true,"geo":{"country":"Testland
+                    ","city":"Localhost"}}
+RawContent        : HTTP/1.1 201 Created
+                    Content-Length: 121
+                    Content-Type: application/json
+                    Date: Tue, 15 Sep 2026 02:41:13 GMT
+                    Server: uvicorn
+
+                    {"id":7,"created_at":"2026-09-15T02:41:14.232015+00:00","spam_flag":t...
+Forms             :
+Headers           : {[Content-Length, 121], [Content-Type, application/json], [Date, Tue, 15 Sep 2026 02:41:13 GMT],
+                    [Server, uvicorn]}
+Images            : {}
+InputFields       : {}
+Links             : {}
+ParsedHtml        :
+RawContentLength  : 121
 ```
 The submission was accepted (not rejected, per the brief's "silently dropped or rejected") but correctly flagged as spam via the filled honeypot field.
 
@@ -33,9 +76,15 @@ The submission was accepted (not rejected, per the brief's "silently dropped or 
 
 **Malformed payload (non-numeric widget_id):**
 ```
-PS> ... -Body '{"widget_id": "not-a-number", "data": {}}'
-StatusCode: 422
-Content: {"detail":[{"type":"int_parsing","loc":["body","widget_id"],"msg":"Input should be a valid integer..."}]}
+PS> Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8003/submissions -Method POST -Body '{"widget_id": "not-a-number", "data": {}}' -ContentType "application/json"
+Invoke-WebRequest : {"detail":[{"type":"int_parsing","loc":["body","widget_id"],"msg":"Input should be a valid
+integer, unable to parse string as an integer","input":"not-a-number"}]}
+At line:1 char:1
++ Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8003/submiss ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (System.Net.HttpWebRequest:HttpWebRequest) [Invoke-WebRequest], WebExc
+   eption
+    + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
 ```
 Rejected with a clean 4xx and a JSON error — never a 500.
 
@@ -45,7 +94,7 @@ Rejected with a clean 4xx and a JSON error — never a 500.
 ```
 PS> python -c "import requests; r = requests.get('https://ipapi.co/8.8.8.8/json/', timeout=5); print(r.status_code); print(r.text)"
 429
-{"reason": "RateLimited", "message": "Please sign up for a paid plan...", "error": true}
+{"reason": "RateLimited", "message": "Please sign up for a paid plan at https://ipapi.co/pricing or contact us for a trial account", "wait": 1.0, "error": true}
 ```
 `ipapi.co`'s free tier was genuinely rate-limited during development testing — a real instance of the exact failure this system is designed to survive. `enrich_ip()` correctly caught this and returned `{'country': None, 'city': None}` without crashing.
 

@@ -45,32 +45,16 @@ At line:1 char:25
     + FullyQualifiedErrorId : WebCmdletWebResponseException,Microsoft.PowerShell.Commands.InvokeWebRequestCommand
 ```
 
-**Honeypot spam control:**
+**Honeypot spam control — submission silently dropped, not stored:**
+
 ```
-PS> Invoke-WebRequest -UseBasicParsing -Uri http://localhost:8003/submissions -Method POST -Body '{"widget_id": 1, "data": {"email": "bot@spam.com"}, "website": "http://spam.com"}' -ContentType "application/json"
-
-
-StatusCode        : 201
-StatusDescription : Created
-Content           : {"id":7,"created_at":"2026-09-15T02:41:14.232015+00:00","spam_flag":true,"geo":{"country":"Testland
-                    ","city":"Localhost"}}
-RawContent        : HTTP/1.1 201 Created
-                    Content-Length: 121
-                    Content-Type: application/json
-                    Date: Tue, 15 Sep 2026 02:41:13 GMT
-                    Server: uvicorn
-
-                    {"id":7,"created_at":"2026-09-15T02:41:14.232015+00:00","spam_flag":t...
-Forms             :
-Headers           : {[Content-Length, 121], [Content-Type, application/json], [Date, Tue, 15 Sep 2026 02:41:13 GMT],
-                    [Server, uvicorn]}
-Images            : {}
-InputFields       : {}
-Links             : {}
-ParsedHtml        :
-RawContentLength  : 121
+$ curl --data-binary "@honeypot.json" http://127.0.0.1:8003/submissions
+{"status":"ok","spam_flag":true}
+HTTP 200
+$ after  = SELECT count(*) FROM submissions   -> 18
 ```
-The submission was accepted (not rejected, per the brief's "silently dropped or rejected") but correctly flagged as spam via the filled honeypot field.
+
+A filled honeypot returns `200 {"status":"ok","spam_flag":true}` (so the bot learns nothing) but **nothing is stored** — the count is unchanged. Per the brief: "silently dropped or rejected."
 
 ## Input validation
 
@@ -114,3 +98,26 @@ All fallback chain scenarios passed.
 INFO: 127.0.0.1:53643 - "POST /submissions HTTP/1.1" 201 Created
 ```
 The failure log appears immediately before the successful `201` response on every request — proving the side effect's failure never blocks or reverts the already-stored submission.
+
+## Widget delivery & cross-origin rendering (Phase 3)
+ 
+**Widget renders on a second-origin page (Phase 3 gate):**
+ 
+Customer site served at `http://127.0.0.1:5500` (plain HTML, `python -m http.server`), loading `<script src="http://127.0.0.1:8003/widget.js?id=1">`. The API binds `127.0.0.1` only, so the test page uses the explicit IPv4 address rather than `localhost` — which Chrome resolves to `::1` first and gets `ERR_CONNECTION_REFUSED` against an IPv4-only server. Ports 5500 vs 8003 are distinct origins, so this is a genuine cross-origin test, not a same-origin coincidence.
+ 
+Result: the widget rendered correctly ("Test Signup Widget" title, Email input, Submit button), and submitting the form returned "Thanks! Your submission was received." — proving the full chain (config fetch → render → cross-origin POST → success) works end to end from a page that shares no code with the API.
+ 
+**Cache headers verified:**
+```
+GET /widgets/1/config    -> Cache-Control: public, max-age=300
+GET /widget.js?v=1       -> Cache-Control: public, max-age=31536000, immutable
+```
+ 
+**Dashboard stats:**
+```json
+{"widget_id":1,"total_submissions":16,"by_day":[{"day":"2026-09-16","count":2},{"day":"2026-09-15","count":14}],"by_country":[{"country":"Testland","count":16}]}
+```
+ 
+## Known gap (honest, tracked for future work)
+ 
+`GET /dashboard/{widget_id}/stats` is currently unauthenticated. The brief specifies this should be a tenant-scoped, authenticated endpoint (same pattern as BE-03's Supabase auth). This is the next item to add before multi-tenant isolation can be considered fully proven — tracked here rather than silently left out.

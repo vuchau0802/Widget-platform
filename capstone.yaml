@@ -1,0 +1,29 @@
+# Capstone submission manifest — read by the evaluator before anything else.
+# See brief Section 11 for what each field means.
+
+name: flyrank-capstone-widget-platform
+stack: python / fastapi / postgres
+
+# One command that boots the whole system on a clean machine (db + API).
+run: bash scripts/dev.sh
+
+# Apply migrations and create the demo tenant/widget used by the customer-site test page.
+seed: python -m repository
+
+# Optional deterministic checks.
+test: python test_geo_fallback.py
+
+base_url: http://127.0.0.1:8003
+
+endpoints:
+  public:
+    - POST /submissions            # visitor submits a widget form (CORS, rate-limited, spam-checked)
+    - GET  /widgets/{id}/config    # public widget config (short-cached)
+    - GET  /widget.js              # versioned widget bundle (long-cached)
+  authenticated:
+    - POST   /widgets                              # create widget (Bearer token)
+    - GET    /widgets                              # list my widgets
+    - GET    /widgets/{id}                         # get one widget (tenant-scoped)
+    - PUT    /widgets/{id}                         # update widget (tenant-scoped)
+    - DELETE /widgets/{id}                         # delete widget (tenant-scoped)
+    - GET    /dashboard/{widget_id}/stats          # submission counts, per-day + per-country breakdown

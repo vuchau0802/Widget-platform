@@ -72,6 +72,15 @@ On a fresh database the demo widget is `widget_id=1` ("Test Signup Widget", one 
 
 Edit `geo.py` and set `PROVIDER_A_ENABLED = False` (or `PROVIDER_B_ENABLED`) to deterministically exercise a provider being down. Deterministic tests: `python test_geo_fallback.py`.
 
+## Tests (deterministic suite)
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+Covers the brief's list — CORS preflight, invalid payloads (`400`/`422`/`413`), rate limiting (per-IP + per-widget with a sliding window), honeypot spam control, idempotency, and the geo provider-fallback chain. The suite stubs the SQL layer and geo/network providers in `conftest.py`, so it needs no live Postgres or Supabase network access and its results are independent of DB seed state (works on a clean machine right after `pip install`).
+
 ## API documentation
 
 Authorized endpoints require `Authorization: Bearer <supabase-access-token>`.
@@ -132,7 +141,11 @@ migrations/      0001_initial.sql, 0002_idempotency.sql
 static/widget.js The embeddable bundle the <script> tag loads
 customer-site/   Plain HTML "customer site" on a second origin (port 5500)
 scripts/         dev.sh (one-command boot), isolation_proof.ps1
+conftest.py      Pytest bootstrap — imports the app without a live DB (no-op migrations)
+test_cors.py     Deterministic CORS preflight tests
+test_submissions.py  Deterministic payload / rate-limit / spam / idempotency tests
 test_geo_fallback.py   Deterministic fallback-chain tests (mocked providers)
+requirements-dev.txt   Test-only deps (pytest, httpx — installed by the test command above)
 ```
 
 ## Known limitations (honest)

@@ -1,8 +1,6 @@
 """
 Deterministic proof of the geo provider fallback chain, per the capstone brief's
-instruction to mock providers for this specific proof (since real free-tier APIs
-are rate-limited and non-deterministic, as directly observed: ipapi.co returned
-a real 429 during manual testing).
+instruction to mock providers for this specific proof.
 """
 from unittest.mock import patch
 import geo
@@ -31,8 +29,15 @@ def test_both_providers_fail():
         print("Both providers fail -> graceful degradation, no crash:", result)
 
 
+def test_local_ip_is_deterministic_testland():
+    result = geo.enrich_ip("testclient")
+    assert result == {"country": "Testland", "city": "Localhost"}
+    print("Local/test IP -> fake deterministic geo row:", result)
+
+
 if __name__ == "__main__":
     test_provider_a_success()
     test_provider_a_fails_provider_b_succeeds()
     test_both_providers_fail()
+    test_local_ip_is_deterministic_testland()
     print("\nAll fallback chain scenarios passed.")

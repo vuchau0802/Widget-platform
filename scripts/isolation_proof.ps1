@@ -47,6 +47,31 @@ function Invoke-Check($label, $method, $uri, $token, $body = $null) {
     }
 }
 
+function Get-LeadingZeroBits($bytes) {
+    $leading = 0
+    foreach ($b in $bytes) {
+        if ($b -eq 0) { $leading += 8 }
+        else { $leading += 8 - ([Convert]::ToString($b, 2)).Length; break }
+    }
+    return $leading
+}
+
+function Solve-ProofOfWork($widgetId) {
+    # Fetch the current challenge and brute-force a nonce whose
+    # SHA-256(challenge:nonce) starts with `difficulty` zero bits
+    # (mirrors bot.py / static/widget.js).
+    $ch = Invoke-RestMethod -Uri "$base/challenge?widget_id=$widgetId"
+    if (-not $ch.difficulty) { return "" }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    $prefix = [System.Text.Encoding]::UTF8.GetBytes("$($ch.challenge):")
+    for ($nonce = 0; $nonce -lt 1048576; $nonce++) {
+        $full = $prefix + [System.Text.Encoding]::UTF8.GetBytes([string]$nonce)
+        $digest = $sha.ComputeHash($full)
+        if ((Get-LeadingZeroBits $digest) -ge $ch.difficulty) { return [string]$nonce }
+    }
+    throw "Could not solve proof-of-work challenge for widget $widgetId"
+}
+
 $tokA = Supabase-GetToken "tenant-a@example.com"
 $tokB = Supabase-GetToken "tenant-b@example.com"
 Write-Host "Auth OK: tokenA.len=$($tokA.Length) tokenB.len=$($tokB.Length)"
@@ -70,7 +95,7 @@ Invoke-Check "B DELETE /widgets/$wid (isolation)" "DELETE" "$base/widgets/$wid" 
 # Airtight submission-read probe: give widget $wid a REAL stored submission, then
 # prove tenant B cannot read tenant A's submission through the widget's dashboard,
 # even while tenant A can. A working query on B's side would expose A's data here.
-$subBody = @{ widget_id = $wid; data = @{ email = "visitor@example.com" } } | ConvertTo-Json
+$subBody = @{ widget_id = $wid; data = @{ email = "visitor@example.com" }; proof = (Solve-ProofOfWork $wid) } | ConvertTo-Json
 $null = Invoke-Check "public POST /submissions (no token)" "POST" "$base/submissions" $null $subBody
 $null = Invoke-Check "A GET /dashboard/$wid/stats (own, has rows)" "GET" "$base/dashboard/$wid/stats" $tokA
 $bDashboard = Invoke-Check "B GET /dashboard/$wid/stats (A rows -> must stay hidden)" "GET" "$base/dashboard/$wid/stats" $tokB

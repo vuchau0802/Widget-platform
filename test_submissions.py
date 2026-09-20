@@ -12,38 +12,9 @@ conftest.py). Geo resolves deterministically because TestClient's IP is
 import datetime
 import json
 
-import pytest
-
 import main
 
-WIDGET = {
-    "id": 1,
-    "tenant_id": 1,
-    "type": "signup_form",
-    "title": "Test Signup Widget",
-    "fields": [{"name": "email", "label": "Email", "type": "email", "required": True}],
-    "button_text": "Submit",
-    "bundle_version": 3,
-}
-
 VALID_PAYLOAD = {"widget_id": 1, "data": {"email": "visitor@example.com"}}
-
-
-@pytest.fixture
-def known_widget(monkeypatch):
-    monkeypatch.setattr(main, "get_widget_by_id", lambda widget_id: dict(WIDGET))
-    return WIDGET
-
-
-@pytest.fixture
-def store_result(monkeypatch):
-    """insert_submission returns (row, deduplicated); a test may swap .value."""
-
-    class Box:
-        value = ({"id": 77, "created_at": datetime.datetime(2026, 1, 1, 12, 0)}, False)
-
-    monkeypatch.setattr(main, "insert_submission", lambda *a, **k: Box.value)
-    return Box
 
 
 # --- invalid payloads ---
@@ -109,11 +80,11 @@ def test_body_over_50kb_is_413(client):
 # --- happy path / CORS on the actual response / geo ---
 
 
-def test_valid_submission_is_201_with_cors_and_geo(client, known_widget, store_result):
+def test_valid_submission_is_201_with_cors_and_geo(client, known_widget, store_result, make_proof):
     r = client.post(
         "/submissions",
         headers={"Origin": "http://example.com"},
-        json=VALID_PAYLOAD,
+        json={**VALID_PAYLOAD, "proof": make_proof()},
     )
     assert r.status_code == 201
     assert r.headers["access-control-allow-origin"] == "*"
@@ -148,10 +119,11 @@ def test_rate_limiter_window_slides(client, monkeypatch):
     assert not main.is_rate_limited("widget:7")
 
 
-def test_sixth_submission_in_window_is_429(client, known_widget, store_result):
+def test_sixth_submission_in_window_is_429(client, known_widget, store_result, make_proof):
+    payload = {**VALID_PAYLOAD, "proof": make_proof()}
     for _ in range(5):
-        assert client.post("/submissions", json=VALID_PAYLOAD).status_code == 201
-    assert client.post("/submissions", json=VALID_PAYLOAD).status_code == 429
+        assert client.post("/submissions", json=payload).status_code == 201
+    assert client.post("/submissions", json=payload).status_code == 429
 
 
 # --- spam control + idempotency ---
@@ -169,8 +141,8 @@ def test_honeypot_filled_dropped_with_spam_flag(client, known_widget, monkeypatc
     assert stored == []
 
 
-def test_retried_idempotency_key_returns_deduplicated(client, known_widget, store_result):
-    payload = {**VALID_PAYLOAD, "idempotency_key": "request-9000"}
+def test_retried_idempotency_key_returns_deduplicated(client, known_widget, store_result, make_proof):
+    payload = {**VALID_PAYLOAD, "idempotency_key": "request-9000", "proof": make_proof()}
     r1 = client.post("/submissions", json=payload)
     assert r1.status_code == 201
     assert r1.json()["deduplicated"] is False

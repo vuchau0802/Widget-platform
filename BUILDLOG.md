@@ -6,6 +6,23 @@ No paid APIs. Postgres is Docker. Geo is the two free providers. Auth is a free 
 
 ---
 
+## 2026-09-19 — Phase 5: proof-of-work bot defense
+
+I added `bot.py` (stateless challenge/solve/verify): the embed fetches `GET /challenge?widget_id=N`, which returns a challenge bound to `widget_id + client IP + 5-minute window` with `Cache-Control: no-store`. `widget.js` solves it with `crypto.subtle` (a nonce whose SHA-256 begins with `POW_DIFFICULTY_BITS` zero bits) and sends it as `proof` on `POST /submissions`. The server recomputes the same challenge string from the request's own inputs — no session, no DB table.
+
+Design choices (mine):
+
+- Gate order: rate limit → widget exists (400) → honeypot (200 `spam_flag:true`) → field validation (400/422, wins cheaply for legit visitors) → PoW (400) → store. The honeypot decoy still returns its `200` to bots regardless of proof.
+- Difficulty 5 bits default = ~32 hashes, instant for a visitor; `POW_DIFFICULTY_BITS=0` disables the gate entirely.
+- One request, one hash to verify — the cost is on the solver, not the server.
+- Deterministic rejection paths in tests: `difficulty 256` = computationally impossible, so "invalid proof" tests never gamble on 1/32 hash luck.
+
+I added `test_bot_defense.py` and `measure_bot_defense.py`. The metric (pinned in the suite): 2 non-PoW vectors refused `400`, 1 honeypot drop `200`, the legitimate visitor accepted `201`, zero bot rows stored, zero false rejects.
+
+Assistant: I asked it to implement the PoW module and rework `widget.js` to solve it, then I reviewed the gate order, kept the honeypot-first behavior, and dictated the metric pins.
+
+---
+
 ## 2026-09-18 — Isolation proof
 
 I signed in tenant A and tenant B in PowerShell (`grant_type=password`), created a widget as A (`id=9`), then called the API as B.

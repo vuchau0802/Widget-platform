@@ -14,6 +14,7 @@ from repository import (
 )
 from geo import enrich_ip
 from auth import supabase
+import bot
 
 app = FastAPI()
 security_scheme = HTTPBearer(auto_error=False)
@@ -36,6 +37,10 @@ FIELD_TYPES = {"text", "email", "tel", "number", "url"}
 RATE_LIMIT_MAX_REQUESTS = 5
 RATE_LIMIT_WINDOW_SECONDS = 10
 request_log: dict[str, deque] = defaultdict(deque)
+
+POW_DIFFICULTY_BITS = int(os.environ.get("POW_DIFFICULTY_BITS", "5"))
+BOT_REJECTED = 0
+BOT_ACCEPTED = 0
 
 
 def build_embed_snippet(widget_id: int) -> str:
@@ -73,6 +78,14 @@ class SubmissionPayload(BaseModel):
     data: dict[str, str]
     website: str = ""
     idempotency_key: str | None = None
+    proof: str = ""
+
+    @field_validator("proof")
+    @classmethod
+    def validate_proof(cls, value: str) -> str:
+        if len(value) > 128:
+            raise ValueError("proof too long (max 128)")
+        return value
 
     @field_validator("data")
     @classmethod
@@ -269,12 +282,26 @@ def get_widget_config(widget_id: int):
     )
 
 
-@app.get("/widget.js", summary="The versioned widget bundle, long-cached")
+@app.get("/widget.js", summary="The embeddable widget bundle, long-cached")
 def get_widget_bundle(v: int = 1):
     return FileResponse(
         "static/widget.js",
         media_type="application/javascript",
         headers={"Cache-Control": "public, max-age=31536000, immutable"},
+    )
+
+
+@app.get("/challenge", summary="Proof-of-work challenge for the embed (no-store)")
+def get_bot_challenge(widget_id: int, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    return JSONResponse(
+        content={
+            "widget_id": widget_id,
+            "challenge": bot.build_challenge(widget_id, client_ip, bot.now_window()),
+            "difficulty": POW_DIFFICULTY_BITS,
+            "window_seconds": bot.WINDOW_SECONDS,
+        },
+        headers={"Cache-Control": "no-store"},
     )
 
 
@@ -319,6 +346,7 @@ def get_dashboard_stats(widget_id: int, tenant_id: int = Depends(get_current_ten
 
 @app.post("/submissions", status_code=201, summary="Public, cross-origin submission endpoint")
 def create_submission(payload: SubmissionPayload, request: Request, background_tasks: BackgroundTasks):
+    global BOT_REJECTED, BOT_ACCEPTED
     client_ip = request.client.host if request.client else "unknown"
 
     if is_rate_limited(client_ip):
@@ -335,6 +363,11 @@ def create_submission(payload: SubmissionPayload, request: Request, background_t
         return JSONResponse(status_code=200, content={"status": "ok", "spam_flag": True})
 
     validate_data_against_fields(payload.data, widget["fields"])
+
+    if not bot.verify(payload.widget_id, client_ip, payload.proof, POW_DIFFICULTY_BITS):
+        BOT_REJECTED += 1
+        raise HTTPException(status_code=400, detail="Bot check failed: missing or invalid proof-of-work")
+    BOT_ACCEPTED += 1
 
     geo = enrich_ip(client_ip)
 

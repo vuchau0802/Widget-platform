@@ -21,6 +21,36 @@
             console.error("Widget failed to load config:", err);
         });
 
+    function leadingZeroBits(byteArray) {
+        var leading = 0;
+        for (var i = 0; i < byteArray.length; i++) {
+            var byte = byteArray[i];
+            if (byte === 0) {
+                leading += 8;
+            } else {
+                leading += 8 - (32 - Math.clz32(byte));
+                break;
+            }
+        }
+        return leading;
+    }
+
+    async function solveChallenge(apiOrigin, widgetId) {
+        var chRes = await fetch(apiOrigin + "/challenge?widget_id=" + encodeURIComponent(widgetId));
+        var ch = await chRes.json();
+        if (!ch.difficulty) return "";
+        if (!(crypto && crypto.subtle)) {
+            console.warn("Widget: proof-of-work needs a secure context (HTTPS or localhost); submitting without proof.");
+            return "";
+        }
+        var encoder = new TextEncoder();
+        for (var nonce = 0; nonce < 1048576; nonce++) {
+            var digest = await crypto.subtle.digest("SHA-256", encoder.encode(ch.challenge + ":" + nonce));
+            if (leadingZeroBits(new Uint8Array(digest)) >= ch.difficulty) return String(nonce);
+        }
+        throw new Error("could not solve bot check challenge");
+    }
+
     function renderWidget(config) {
         var container = document.createElement("div");
         container.style.cssText =
@@ -76,10 +106,18 @@
             });
             var honeypotValue = formData.get("website") || "";
 
-            fetch(apiOrigin + "/submissions", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ widget_id: parseInt(widgetId, 10), data: data, website: honeypotValue }),
+            solveChallenge(apiOrigin, widgetId)
+                .then(function(proof) {
+                    return fetch(apiOrigin + "/submissions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            widget_id: parseInt(widgetId, 10),
+                            data: data,
+                            website: honeypotValue,
+                            proof: proof || "",
+                        }),
+                    });
                 })
                 .then(function(res) {
                     if (res.status === 429) {

@@ -162,6 +162,7 @@ class WidgetCreate(BaseModel):
     title: str
     fields: list[dict]
     button_text: str = "Submit"
+    targeting_rules: dict | None = None
 
     @field_validator("type")
     @classmethod
@@ -193,14 +194,40 @@ class WidgetCreate(BaseModel):
                 raise ValueError(f"field '{name}' has unsupported type '{field_type}'")
         return fields
 
+    @field_validator("targeting_rules")
+    @classmethod
+    def validate_targeting_rules(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return value
+        allowed_keys = {"page_paths", "delay_seconds", "once_per_visitor"}
+        unknown = set(value.keys()) - allowed_keys
+        if unknown:
+            raise ValueError(f"unknown targeting rule keys: {sorted(unknown)}")
+        if "page_paths" in value:
+            if not isinstance(value["page_paths"], list):
+                raise ValueError("page_paths must be a list of strings")
+            for p in value["page_paths"]:
+                if not isinstance(p, str) or not p.strip():
+                    raise ValueError("each page_path must be a non-empty string")
+        if "delay_seconds" in value:
+            if not isinstance(value["delay_seconds"], (int, float)) or value["delay_seconds"] < 0:
+                raise ValueError("delay_seconds must be a non-negative number")
+        if "once_per_visitor" in value:
+            if not isinstance(value["once_per_visitor"], bool):
+                raise ValueError("once_per_visitor must be a boolean")
+        return value
+
 
 class WidgetUpdate(BaseModel):
-    title: str
-    button_text: str = "Submit"
+    title: str | None = None
+    button_text: str | None = None
+    targeting_rules: dict | None = None
 
     @field_validator("title", "button_text")
     @classmethod
-    def validate_text(cls, value: str) -> str:
+    def validate_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
         value = value.strip()
         if not value:
             raise ValueError("cannot be empty")
@@ -208,10 +235,34 @@ class WidgetUpdate(BaseModel):
             raise ValueError("too long (max 200)")
         return value
 
+    @field_validator("targeting_rules")
+    @classmethod
+    def validate_targeting_rules(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return value
+        allowed_keys = {"page_paths", "delay_seconds", "once_per_visitor"}
+        unknown = set(value.keys()) - allowed_keys
+        if unknown:
+            raise ValueError(f"unknown targeting rule keys: {sorted(unknown)}")
+        if "page_paths" in value:
+            if not isinstance(value["page_paths"], list):
+                raise ValueError("page_paths must be a list of strings")
+            for p in value["page_paths"]:
+                if not isinstance(p, str) or not p.strip():
+                    raise ValueError("each page_path must be a non-empty string")
+        if "delay_seconds" in value:
+            if not isinstance(value["delay_seconds"], (int, float)) or value["delay_seconds"] < 0:
+                raise ValueError("delay_seconds must be a non-negative number")
+        if "once_per_visitor" in value:
+            if not isinstance(value["once_per_visitor"], bool):
+                raise ValueError("once_per_visitor must be a boolean")
+        return value
+
 
 @app.post("/widgets", status_code=201, summary="Create a widget (authenticated)")
 def create_widget_route(payload: WidgetCreate, tenant_id: int = Depends(get_current_tenant_id)):
-    widget = create_widget(tenant_id, payload.type, payload.title, payload.fields, payload.button_text)
+    widget = create_widget(tenant_id, payload.type, payload.title, payload.fields, payload.button_text,
+                           payload.targeting_rules)
     return {
         "id": widget["id"],
         "title": widget["title"],
@@ -246,7 +297,8 @@ def get_widget_route(widget_id: int, tenant_id: int = Depends(get_current_tenant
 
 @app.put("/widgets/{widget_id}", summary="Update one of my widgets (authenticated, tenant-scoped)")
 def update_widget_route(widget_id: int, payload: WidgetUpdate, tenant_id: int = Depends(get_current_tenant_id)):
-    widget = update_widget_for_tenant(widget_id, tenant_id, payload.title, payload.button_text)
+    widget = update_widget_for_tenant(widget_id, tenant_id, payload.title, payload.button_text,
+                                       payload.targeting_rules)
     if widget is None:
         raise HTTPException(status_code=404, detail=f"Widget {widget_id} not found")
     return dict(widget)
@@ -274,6 +326,7 @@ def get_widget_config(widget_id: int):
         "fields": widget["fields"],
         "button_text": widget["button_text"],
         "bundle_version": widget["bundle_version"],
+        "targeting_rules": widget.get("targeting_rules") or {},
     }
     return Response(
         content=json.dumps(config),

@@ -15,11 +15,65 @@
             return res.json();
         })
         .then(function(config) {
-            renderWidget(config);
+            if (evaluateTargeting(config.targeting_rules || {})) {
+                applyDelay(function() {
+                    renderWidget(config);
+                }, config.targeting_rules.delay_seconds);
+            }
         })
         .catch(function(err) {
             console.error("Widget failed to load config:", err);
         });
+
+    function evaluateTargeting(rules) {
+        if (rules.page_paths && rules.page_paths.length > 0) {
+            var pathname = window.location.pathname;
+            var matched = false;
+            for (var i = 0; i < rules.page_paths.length; i++) {
+                if (matchPath(rules.page_paths[i], pathname)) {
+                    matched = true;
+                    break;
+                }
+            }
+            if (!matched) return false;
+        }
+
+        if (rules.once_per_visitor) {
+            var storageKey = "widget_seen_" + widgetId;
+            if (localStorage.getItem(storageKey)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    function matchPath(pattern, pathname) {
+        if (pattern === pathname) return true;
+        if (pattern.endsWith("/*")) {
+            var prefix = pattern.slice(0, -2);
+            return pathname === prefix || pathname.startsWith(prefix + "/");
+        }
+        if (pattern === "*") return true;
+        return false;
+    }
+
+    function applyDelay(callback, seconds) {
+        if (!seconds || seconds <= 0) {
+            callback();
+            return;
+        }
+        setTimeout(callback, seconds * 1000);
+    }
+
+    function markSeen() {
+        var storageKey = "widget_seen_" + widgetId;
+        try {
+            localStorage.setItem(storageKey, "1");
+        } catch (e) {
+            // localStorage unavailable (private browsing, etc.) — silently skip
+        }
+    }
 
     function leadingZeroBits(byteArray) {
         var leading = 0;
@@ -130,6 +184,7 @@
                         statusMsg.style.color = "red";
                         return;
                     }
+                    markSeen();
                     statusMsg.textContent = "Thanks! Your submission was received.";
                     statusMsg.style.color = "green";
                     form.reset();

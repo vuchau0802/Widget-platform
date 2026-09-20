@@ -63,12 +63,14 @@ def get_or_create_tenant(supabase_user_id: str, email: str) -> int:
     return row["id"]
 
 
-def create_widget(tenant_id: int, type_: str, title: str, fields: list, button_text: str) -> dict:
+def create_widget(tenant_id: int, type_: str, title: str, fields: list, button_text: str,
+                   targeting_rules: dict | None = None) -> dict:
     conn = get_db()
     row = conn.execute(
-        """INSERT INTO widgets (tenant_id, type, title, fields, button_text)
-           VALUES (%s, %s, %s, %s, %s) RETURNING *""",
-        (tenant_id, type_, title, psycopg.types.json.Json(fields), button_text),
+        """INSERT INTO widgets (tenant_id, type, title, fields, button_text, targeting_rules)
+           VALUES (%s, %s, %s, %s, %s, %s) RETURNING *""",
+        (tenant_id, type_, title, psycopg.types.json.Json(fields), button_text,
+         psycopg.types.json.Json(targeting_rules or {})),
     ).fetchone()
     conn.commit()
     conn.close()
@@ -94,18 +96,30 @@ def get_widget_for_tenant(widget_id: int, tenant_id: int):
     return row
 
 
-def update_widget_for_tenant(widget_id: int, tenant_id: int, title=None, button_text=None):
-    if title is None and button_text is None:
+def update_widget_for_tenant(widget_id: int, tenant_id: int, title=None, button_text=None,
+                              targeting_rules=None):
+    if title is None and button_text is None and targeting_rules is None:
         return None
     conn = get_db()
-    row = conn.execute(
-        """UPDATE widgets
-           SET title = COALESCE(%s, title),
-               button_text = COALESCE(%s, button_text),
-               bundle_version = bundle_version + 1
-           WHERE id = %s AND tenant_id = %s RETURNING *""",
-        (title, button_text, widget_id, tenant_id),
-    ).fetchone()
+    if targeting_rules is not None:
+        row = conn.execute(
+            """UPDATE widgets
+               SET title = COALESCE(%s, title),
+                   button_text = COALESCE(%s, button_text),
+                   targeting_rules = %s,
+                   bundle_version = bundle_version + 1
+               WHERE id = %s AND tenant_id = %s RETURNING *""",
+            (title, button_text, psycopg.types.json.Json(targeting_rules), widget_id, tenant_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """UPDATE widgets
+               SET title = COALESCE(%s, title),
+                   button_text = COALESCE(%s, button_text),
+                   bundle_version = bundle_version + 1
+               WHERE id = %s AND tenant_id = %s RETURNING *""",
+            (title, button_text, widget_id, tenant_id),
+        ).fetchone()
     conn.commit()
     conn.close()
     return row

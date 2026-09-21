@@ -1,16 +1,19 @@
 import os
 import time
 import json
+import secrets
+import datetime
 from collections import defaultdict, deque
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, Response, FileResponse
+from fastapi.responses import JSONResponse, Response, FileResponse, HTMLResponse
 from pydantic import BaseModel, field_validator
 from repository import (
     init_db, get_widget_by_id, insert_submission, get_db,
     get_or_create_tenant, create_widget, list_widgets_for_tenant,
     get_widget_for_tenant, update_widget_for_tenant, delete_widget_for_tenant,
+    confirm_submission, get_submissions_for_export, soft_delete_by_email,
 )
 from geo import enrich_ip
 from auth import supabase
@@ -79,6 +82,7 @@ class SubmissionPayload(BaseModel):
     website: str = ""
     idempotency_key: str | None = None
     proof: str = ""
+    consent_given: bool = False
 
     @field_validator("proof")
     @classmethod
@@ -110,17 +114,20 @@ class SubmissionPayload(BaseModel):
         return value
 
 
-def send_confirmation_email(data: dict) -> None:
+def send_confirmation_email(data: dict, token: str) -> None:
+    base = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8003").rstrip("/")
+    confirm_url = f"{base}/confirm-email?token={token}"
+    print(f"[double-opt-in] Confirmation URL: {confirm_url}")
     raise Exception("SMTP server unreachable (simulated failure for Phase 2 proof)")
 
 
-def send_confirmation_email_safe(data: dict) -> None:
+def send_confirmation_email_safe(data: dict, token: str) -> None:
     """Runs in a FastAPI BackgroundTask (off the request path). Retries twice,
     then gives up — a failure must never break the already-stored submission."""
     attempts = 2
     for attempt in range(1, attempts + 1):
         try:
-            send_confirmation_email(data)
+            send_confirmation_email(data, token)
             return
         except Exception as e:
             print(f"[side-effect-failure] confirmation email attempt {attempt}/{attempts} failed, "
@@ -424,6 +431,9 @@ def create_submission(payload: SubmissionPayload, request: Request, background_t
 
     geo = enrich_ip(client_ip)
 
+    confirmation_token = secrets.token_urlsafe(32)
+    consent_ts = datetime.datetime.now(datetime.timezone.utc) if payload.consent_given else None
+
     row, deduplicated = insert_submission(
         widget_id=payload.widget_id,
         tenant_id=widget["tenant_id"],
@@ -433,10 +443,13 @@ def create_submission(payload: SubmissionPayload, request: Request, background_t
         city=geo["city"],
         spam_flag=False,
         idempotency_key=payload.idempotency_key,
+        confirmation_token=confirmation_token,
+        consent_given=payload.consent_given,
+        consent_timestamp=consent_ts,
     )
 
     if not deduplicated:
-        background_tasks.add_task(send_confirmation_email_safe, payload.data)
+        background_tasks.add_task(send_confirmation_email_safe, payload.data, confirmation_token)
 
     return {
         "id": row["id"],
@@ -444,4 +457,129 @@ def create_submission(payload: SubmissionPayload, request: Request, background_t
         "spam_flag": False,
         "geo": geo,
         "deduplicated": deduplicated,
+    }
+
+
+# --- Double opt-in confirmation ---
+
+@app.get("/confirm-email", summary="Confirm email via token (public, double opt-in)")
+def confirm_email(token: str):
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing token")
+    submission = confirm_submission(token)
+    if submission is None:
+        return HTMLResponse(
+            content="<h2>Invalid or expired confirmation link.</h2><p>This email may have already been confirmed.</p>",
+            status_code=400,
+        )
+    base = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8003").rstrip("/")
+    return HTMLResponse(
+        content=f"""<h2>Email Confirmed</h2>
+<p>Thank you! Your submission (ID: {submission['id']}) has been confirmed.</p>
+<p><a href="{base}">Back to home</a></p>""",
+        status_code=200,
+    )
+
+
+# --- GDPR endpoints (authenticated, tenant-scoped) ---
+
+class GdprExportRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not value or "@" not in value:
+            raise ValueError("valid email required")
+        return value
+
+
+class GdprDeleteRequest(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, value: str) -> str:
+        value = value.strip().lower()
+        if not value or "@" not in value:
+            raise ValueError("valid email required")
+        return value
+
+
+@app.get("/gdpr/export/{widget_id}", summary="Export all submissions for a widget (authenticated, tenant-scoped)")
+def gdpr_export_submissions(widget_id: int, tenant_id: int = Depends(get_current_tenant_id)):
+    widget = get_widget_for_tenant(widget_id, tenant_id)
+    if widget is None:
+        raise HTTPException(status_code=404, detail=f"Widget {widget_id} not found")
+    rows = get_submissions_for_export(widget_id, tenant_id)
+    return {
+        "widget_id": widget_id,
+        "total": len(rows),
+        "submissions": [
+            {
+                "id": r["id"],
+                "data": r["data"],
+                "ip_address": r["ip_address"],
+                "country": r["country"],
+                "city": r["city"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "confirmed_at": r["confirmed_at"].isoformat() if r["confirmed_at"] else None,
+                "consent_given": r["consent_given"],
+                "consent_timestamp": r["consent_timestamp"].isoformat() if r["consent_timestamp"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.post("/gdpr/export-by-email/{widget_id}", summary="Export submissions by email address (authenticated, tenant-scoped)")
+def gdpr_export_by_email(widget_id: int, payload: GdprExportRequest,
+                         tenant_id: int = Depends(get_current_tenant_id)):
+    widget = get_widget_for_tenant(widget_id, tenant_id)
+    if widget is None:
+        raise HTTPException(status_code=404, detail=f"Widget {widget_id} not found")
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, data, ip_address, country, city, created_at, confirmed_at,
+                  consent_given, consent_timestamp
+           FROM submissions
+           WHERE widget_id = %s AND tenant_id = %s AND deleted_at IS NULL
+             AND data->>'email' = %s
+           ORDER BY created_at""",
+        (widget_id, tenant_id, payload.email),
+    ).fetchall()
+    conn.close()
+    return {
+        "widget_id": widget_id,
+        "email": payload.email,
+        "total": len(rows),
+        "submissions": [
+            {
+                "id": r["id"],
+                "data": r["data"],
+                "ip_address": r["ip_address"],
+                "country": r["country"],
+                "city": r["city"],
+                "created_at": r["created_at"].isoformat() if r["created_at"] else None,
+                "confirmed_at": r["confirmed_at"].isoformat() if r["confirmed_at"] else None,
+                "consent_given": r["consent_given"],
+                "consent_timestamp": r["consent_timestamp"].isoformat() if r["consent_timestamp"] else None,
+            }
+            for r in rows
+        ],
+    }
+
+
+@app.delete("/gdpr/delete-by-email/{widget_id}", summary="Delete submissions by email (GDPR right to erasure, authenticated, tenant-scoped)")
+def gdpr_delete_by_email(widget_id: int, payload: GdprDeleteRequest,
+                         tenant_id: int = Depends(get_current_tenant_id)):
+    widget = get_widget_for_tenant(widget_id, tenant_id)
+    if widget is None:
+        raise HTTPException(status_code=404, detail=f"Widget {widget_id} not found")
+    count = soft_delete_by_email(payload.email, widget_id, tenant_id)
+    return {
+        "widget_id": widget_id,
+        "email": payload.email,
+        "deleted_count": count,
     }

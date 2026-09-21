@@ -154,7 +154,8 @@ def get_widget_by_id(widget_id: int):
 
 
 def insert_submission(widget_id: int, tenant_id: int, data: dict, ip: str, country, city, spam_flag: bool,
-                      idempotency_key: str | None = None) -> tuple[dict, bool]:
+                      idempotency_key: str | None = None, confirmation_token: str | None = None,
+                      consent_given: bool = False, consent_timestamp=None) -> tuple[dict, bool]:
     """Insert a submission. With an idempotency_key, a retried insert returns the
     existing row instead of creating a duplicate. Returns (row, deduplicated)."""
     conn = get_db()
@@ -162,11 +163,13 @@ def insert_submission(widget_id: int, tenant_id: int, data: dict, ip: str, count
 
     if idempotency_key:
         row = conn.execute(
-            """INSERT INTO submissions (widget_id, tenant_id, data, ip_address, country, city, spam_flag, idempotency_key)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            """INSERT INTO submissions (widget_id, tenant_id, data, ip_address, country, city, spam_flag,
+                   idempotency_key, confirmation_token, consent_given, consent_timestamp)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                ON CONFLICT (tenant_id, idempotency_key) DO NOTHING
                RETURNING id, created_at""",
-            (widget_id, tenant_id, psycopg.types.json.Json(data), ip, country, city, spam_flag, idempotency_key),
+            (widget_id, tenant_id, psycopg.types.json.Json(data), ip, country, city, spam_flag,
+             idempotency_key, confirmation_token, consent_given, consent_timestamp),
         ).fetchone()
         if row is None:
             row = conn.execute(
@@ -176,14 +179,78 @@ def insert_submission(widget_id: int, tenant_id: int, data: dict, ip: str, count
             deduplicated = True
     else:
         row = conn.execute(
-            """INSERT INTO submissions (widget_id, tenant_id, data, ip_address, country, city, spam_flag)
-               VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id, created_at""",
-            (widget_id, tenant_id, psycopg.types.json.Json(data), ip, country, city, spam_flag),
+            """INSERT INTO submissions (widget_id, tenant_id, data, ip_address, country, city, spam_flag,
+                   confirmation_token, consent_given, consent_timestamp)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id, created_at""",
+            (widget_id, tenant_id, psycopg.types.json.Json(data), ip, country, city, spam_flag,
+             confirmation_token, consent_given, consent_timestamp),
         ).fetchone()
 
     conn.commit()
     conn.close()
     return row, deduplicated
+
+
+def confirm_submission(token: str) -> dict | None:
+    """Confirm a submission via its confirmation token. Returns the updated row or None."""
+    conn = get_db()
+    row = conn.execute(
+        """UPDATE submissions
+           SET confirmed_at = now()
+           WHERE confirmation_token = %s AND confirmed_at IS NULL AND deleted_at IS NULL
+           RETURNING id, widget_id, tenant_id, data, created_at""",
+        (token,),
+    ).fetchone()
+    conn.commit()
+    conn.close()
+    return row
+
+
+def get_submission_by_token(token: str):
+    conn = get_db()
+    row = conn.execute(
+        "SELECT * FROM submissions WHERE confirmation_token = %s AND deleted_at IS NULL",
+        (token,),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def get_submissions_for_export(widget_id: int, tenant_id: int) -> list:
+    """Export all non-deleted submissions for a widget (GDPR data portability)."""
+    conn = get_db()
+    rows = conn.execute(
+        """SELECT id, data, ip_address, country, city, created_at, confirmed_at,
+                  consent_given, consent_timestamp
+           FROM submissions
+           WHERE widget_id = %s AND tenant_id = %s AND deleted_at IS NULL
+           ORDER BY created_at""",
+        (widget_id, tenant_id),
+    ).fetchall()
+    conn.close()
+    return rows
+
+
+def soft_delete_by_email(email: str, widget_id: int, tenant_id: int) -> int:
+    """Soft-delete all submissions matching an email for a widget (GDPR right to erasure).
+    Anonymizes the data JSONB by replacing the email value. Returns count of affected rows."""
+    conn = get_db()
+    cursor = conn.execute(
+        """UPDATE submissions
+           SET deleted_at = now(),
+               data = data - 'email' || jsonb_build_object('email', '[deleted]'),
+               ip_address = NULL,
+               country = NULL,
+               city = NULL
+           WHERE widget_id = %s AND tenant_id = %s
+             AND deleted_at IS NULL
+             AND data->>'email' = %s""",
+        (widget_id, tenant_id, email),
+    )
+    count = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return count
 
 
 if __name__ == "__main__":

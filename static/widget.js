@@ -141,6 +141,17 @@
             "position:absolute; left:-9999px; width:1px; height:1px; overflow:hidden;";
         form.appendChild(honeypot);
 
+        var consentLabel = document.createElement("label");
+        consentLabel.style.cssText = "display:block; margin-top:10px; font-size:13px;";
+        var consentCheckbox = document.createElement("input");
+        consentCheckbox.type = "checkbox";
+        consentCheckbox.name = "consent_given";
+        consentCheckbox.required = true;
+        consentCheckbox.style.cssText = "margin-right:6px;";
+        consentLabel.appendChild(consentCheckbox);
+        consentLabel.appendChild(document.createTextNode("I agree to the privacy policy and consent to data processing"));
+        form.appendChild(consentLabel);
+
         var submitBtn = document.createElement("button");
         submitBtn.type = "submit";
         submitBtn.textContent = config.button_text || "Submit";
@@ -155,8 +166,13 @@
             e.preventDefault();
             var formData = new FormData(form);
             var data = {};
+            var consent = false;
             formData.forEach(function(value, key) {
-                if (key !== "website") data[key] = value;
+                if (key === "consent_given") {
+                    consent = true;
+                } else if (key !== "website") {
+                    data[key] = value;
+                }
             });
             var honeypotValue = formData.get("website") || "";
 
@@ -170,6 +186,7 @@
                             data: data,
                             website: honeypotValue,
                             proof: proof || "",
+                            consent_given: consent,
                         }),
                     });
                 })
@@ -185,7 +202,7 @@
                         return;
                     }
                     markSeen();
-                    statusMsg.textContent = "Thanks! Your submission was received.";
+                    statusMsg.textContent = "Thanks! Please check your email to confirm your subscription.";
                     statusMsg.style.color = "green";
                     form.reset();
                 })

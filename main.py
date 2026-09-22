@@ -3,11 +3,13 @@ import time
 import json
 import secrets
 import datetime
+import asyncio
 from collections import defaultdict, deque
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, FileResponse, HTMLResponse
+from sse_starlette.sse import EventSourceResponse
 from pydantic import BaseModel, field_validator
 from repository import (
     init_db, get_widget_by_id, insert_submission, get_db,
@@ -17,6 +19,7 @@ from repository import (
 )
 from geo import enrich_ip
 from auth import supabase
+from event_bus import bus
 import bot
 
 app = FastAPI()
@@ -402,6 +405,137 @@ def get_dashboard_stats(widget_id: int, tenant_id: int = Depends(get_current_ten
     }
 
 
+@app.get("/dashboard/{widget_id}/events", summary="SSE stream of new submissions (authenticated, tenant-scoped)")
+async def dashboard_events(widget_id: int, request: Request, token: str = None,
+                           credentials=Depends(security_scheme)):
+    resolved_token = token or (credentials.credentials if credentials else None)
+    if not resolved_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        result = supabase.auth.get_user(resolved_token)
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    if result is None or result.user is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+    tenant_id = get_or_create_tenant(result.user.id, result.user.email)
+
+    widget = get_widget_for_tenant(widget_id, tenant_id)
+    if widget is None:
+        raise HTTPException(status_code=404, detail=f"Widget {widget_id} not found")
+
+    queue = bus.subscribe(widget_id)
+
+    async def event_generator():
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    data = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield {"event": "new_submission", "data": data}
+                except asyncio.TimeoutError:
+                    yield {"event": "heartbeat", "data": "ping"}
+        finally:
+            bus.unsubscribe(widget_id, queue)
+
+    return EventSourceResponse(event_generator())
+
+
+@app.get("/dashboard/{widget_id}/page", summary="Live dashboard HTML page (authenticated via query param)")
+def dashboard_page(widget_id: int):
+    base = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8003").rstrip("/")
+    return HTMLResponse(
+        content=f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Dashboard — Widget {widget_id}</title>
+<style>
+  * {{ margin:0; padding:0; box-sizing:border-box; }}
+  body {{ font-family:system-ui,sans-serif; background:#f5f5f5; padding:20px; }}
+  h1 {{ font-size:1.4rem; margin-bottom:16px; }}
+  .stats {{ display:flex; gap:12px; margin-bottom:20px; }}
+  .stat {{ background:#fff; border:1px solid #ddd; border-radius:8px; padding:16px 24px; text-align:center; }}
+  .stat .num {{ font-size:2rem; font-weight:700; color:#2563eb; }}
+  .stat .label {{ font-size:0.85rem; color:#666; margin-top:4px; }}
+  .status {{ font-size:0.8rem; margin-bottom:12px; }}
+  .status .dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }}
+  .status .dot.green {{ background:#16a34a; }}
+  .status .dot.red {{ background:#dc2626; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; border:1px solid #ddd; border-radius:8px; overflow:hidden; }}
+  th {{ background:#f0f0f0; text-align:left; padding:10px 12px; font-size:0.85rem; border-bottom:1px solid #ddd; }}
+  td {{ padding:10px 12px; border-bottom:1px solid #eee; font-size:0.85rem; }}
+  tr.new {{ animation: flash 1s ease; }}
+  @keyframes flash {{ 0%{{background:#dbeafe}} 100%{{background:#fff}} }}
+  .empty {{ text-align:center; padding:40px; color:#999; }}
+  input {{ padding:6px 10px; border:1px solid #ccc; border-radius:4px; margin-right:8px; }}
+  button {{ padding:6px 14px; background:#2563eb; color:#fff; border:none; border-radius:4px; cursor:pointer; }}
+  button:hover {{ background:#1d4ed8; }}
+</style>
+</head>
+<body>
+<h1>Live Dashboard — Widget {widget_id}</h1>
+<div>
+  <label>Token: <input id="token" type="password" placeholder="paste Supabase JWT" size="40"></label>
+  <button onclick="connect()">Connect</button>
+</div>
+<div class="status" id="status"></div>
+<div class="stats">
+  <div class="stat"><div class="num" id="total">-</div><div class="label">Total</div></div>
+  <div class="stat"><div class="num" id="today">-</div><div class="label">Today</div></div>
+  <div class="stat"><div class="num" id="connected-clients">-</div><div class="label">Live Viewers</div></div>
+</div>
+<table>
+  <thead><tr><th>ID</th><th>Email</th><th>Country</th><th>Consent</th><th>Time</th></tr></thead>
+  <tbody id="feed"><tr><td colspan="5" class="empty">Connect to see live submissions...</td></tr></tbody>
+</table>
+<script>
+var evtSource = null;
+function connect() {{
+  var token = document.getElementById('token').value.trim();
+  if (!token) {{ alert('Paste your auth token'); return; }}
+  if (evtSource) evtSource.close();
+  document.getElementById('status').innerHTML = '<span class="dot green"></span> Connecting...';
+  evtSource = new EventSource('/dashboard/{widget_id}/events?token=' + encodeURIComponent(token));
+  evtSource.onopen = function() {{
+    document.getElementById('status').innerHTML = '<span class="dot green"></span> Connected — listening for new submissions';
+    loadStats(token);
+  }};
+  evtSource.addEventListener('new_submission', function(e) {{
+    var sub = JSON.parse(e.data);
+    addRow(sub);
+    loadStats(token);
+  }});
+  evtSource.onerror = function() {{
+    document.getElementById('status').innerHTML = '<span class="dot red"></span> Disconnected — click Connect to retry';
+  }};
+}}
+function addRow(sub) {{
+  var tbody = document.getElementById('feed');
+  if (tbody.querySelector('.empty')) tbody.innerHTML = '';
+  var tr = document.createElement('tr');
+  tr.className = 'new';
+  tr.innerHTML = '<td>'+sub.id+'</td><td>'+(sub.data.email||'-')+'</td><td>'+(sub.country||'-')+'</td><td>'+(sub.consent_given?'Yes':'No')+'</td><td>'+new Date(sub.created_at).toLocaleTimeString()+'</td>';
+  tbody.insertBefore(tr, tbody.firstChild);
+}}
+function loadStats(token) {{
+  fetch('/dashboard/{widget_id}/stats', {{headers:{{'Authorization':'Bearer '+token}}}})
+    .then(function(r) {{ return r.json(); }})
+    .then(function(s) {{
+      document.getElementById('total').textContent = s.total_submissions;
+      var today = new Date().toISOString().slice(0,10);
+      var todayEntry = s.by_day.find(function(d){{ return d.day === today; }});
+      document.getElementById('today').textContent = todayEntry ? todayEntry.count : 0;
+    }}).catch(function(){{}});
+}}
+</script>
+</body>
+</html>""",
+        status_code=200,
+    )
+
+
 # --- Public submission endpoint ---
 
 @app.post("/submissions", status_code=201, summary="Public, cross-origin submission endpoint")
@@ -450,6 +584,15 @@ def create_submission(payload: SubmissionPayload, request: Request, background_t
 
     if not deduplicated:
         background_tasks.add_task(send_confirmation_email_safe, payload.data, confirmation_token)
+
+    bus.publish(payload.widget_id, {
+        "id": row["id"],
+        "data": payload.data,
+        "country": geo["country"],
+        "city": geo["city"],
+        "consent_given": payload.consent_given,
+        "created_at": row["created_at"].isoformat(),
+    })
 
     return {
         "id": row["id"],

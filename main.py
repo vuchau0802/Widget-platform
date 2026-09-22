@@ -4,6 +4,7 @@ import json
 import secrets
 import datetime
 import asyncio
+from pathlib import Path
 from collections import defaultdict, deque
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, Depends
 from fastapi.security import HTTPBearer
@@ -48,12 +49,26 @@ POW_DIFFICULTY_BITS = int(os.environ.get("POW_DIFFICULTY_BITS", "5"))
 BOT_REJECTED = 0
 BOT_ACCEPTED = 0
 
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _load_widget_version() -> str:
+    """Load the content hash from the build script output."""
+    ver_file = STATIC_DIR / "widget.version.txt"
+    if ver_file.exists():
+        return ver_file.read_text().strip()
+    return "dev"
+
+
+WIDGET_VERSION = _load_widget_version()
+
 
 def build_embed_snippet(widget_id: int) -> str:
     """The one line a customer pastes into their site. The public base URL is
-    configurable via PUBLIC_BASE_URL so a real deployment points at its own API."""
+    configurable via PUBLIC_BASE_URL so a real deployment points at its own API.
+    Includes ?v= for cache-busting on bundle updates."""
     base = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8003").rstrip("/")
-    return f'<script src="{base}/widget.js?id={widget_id}"></script>'
+    return f'<script src="{base}/widget.js?id={widget_id}&v={WIDGET_VERSION}"></script>'
 
 
 @app.middleware("http")
@@ -345,12 +360,23 @@ def get_widget_config(widget_id: int):
     )
 
 
-@app.get("/widget.js", summary="The embeddable widget bundle, long-cached")
-def get_widget_bundle(v: int = 1):
+@app.get("/widget.js", summary="The embeddable widget bundle, long-cached with content-hash versioning")
+def get_widget_bundle(v: str = ""):
+    min_file = STATIC_DIR / "widget.min.js"
+    if min_file.exists():
+        return FileResponse(
+            str(min_file),
+            media_type="application/javascript",
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "X-Widget-Version": WIDGET_VERSION,
+            },
+        )
+    # Fallback to unminified if build hasn't run
     return FileResponse(
-        "static/widget.js",
+        str(STATIC_DIR / "widget.js"),
         media_type="application/javascript",
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        headers={"Cache-Control": "public, max-age=300"},
     )
 
 

@@ -1,18 +1,62 @@
 <!DOCTYPE html>
-<html>
-
+<html lang="en">
 <head>
-    <title>My Customer Website</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>My Bakery — Fresh bread &amp; pastries daily</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               color: #1a202c; background: #fafafa; line-height: 1.6; }
+        header { background: linear-gradient(135deg, #f6ad55, #ed8936); color: #fff; padding: 40px 20px; text-align: center; }
+        header h1 { font-size: 2rem; font-weight: 700; margin-bottom: 8px; }
+        header p { font-size: 1rem; opacity: 0.9; }
+        main { max-width: 900px; margin: 0 auto; padding: 40px 20px; }
+        .section-title { font-size: 1.3rem; font-weight: 600; color: #2d3748; margin-bottom: 16px; }
+        .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 24px; margin-bottom: 48px; }
+        .feature { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; }
+        .feature h3 { font-size: 1rem; color: #2d3748; margin-bottom: 6px; }
+        .feature p { font-size: 0.9rem; color: #718096; }
+        .widget-section { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px;
+                          max-width: 420px; margin: 0 auto; }
+        .widget-section h2 { font-size: 1.2rem; color: #2d3748; margin-bottom: 8px; }
+        .widget-section p { font-size: 0.9rem; color: #718096; margin-bottom: 20px; }
+        footer { text-align: center; padding: 24px 20px; color: #a0aec0; font-size: 0.8rem; border-top: 1px solid #e2e8f0; margin-top: 48px; }
+        @media (max-width: 600px) {
+            header h1 { font-size: 1.5rem; }
+            main { padding: 24px 16px; }
+        }
+    </style>
 </head>
-
 <body>
-    <h1>Welcome to My Bakery</h1>
-    <p>This is a plain HTML page, completely unrelated to the widget platform's own code, served from a different origin (port 5500) than the API (port 8003). It proves the widget genuinely works across origins, not just within the same server.</p>
+    <header>
+        <h1>&#127838; My Bakery</h1>
+        <p>Fresh bread, pastries, and coffee — baked with love every morning.</p>
+    </header>
 
-    <hr>
-    <h2>Sign up for our newsletter:</h2>
+    <main>
+        <div class="features">
+            <div class="feature">
+                <h3>&#127835; Sourdough Bread</h3>
+                <p>Slow-fermented for 48 hours with our century-old starter. Crusty outside, soft inside.</p>
+            </div>
+            <div class="feature">
+                <h3>&#127856; Croissants</h3>
+                <p>Buttery, flaky layers made with imported French butter. Best served warm.</p>
+            </div>
+            <div class="feature">
+                <h3>&#9749; Coffee</h3>
+                <p>Single-origin beans roasted in-house. Pair with any pastry for the perfect morning.</p>
+            </div>
+        </div>
 
-    <script src="http://127.0.0.1:8003/widget.js?id=1"></script>
+        <div class="widget-section">
+            <h2>Stay in the loop</h2>
+            <p>Get notified about new flavors, weekend specials, and exclusive offers.</p>
+            <script src="http://127.0.0.1:8005/widget.js?id=10"></script>
+        </div>
+    </main>
+
+    <footer>&copy; 2026 My Bakery. Baked with &#10084; locally.</footer>
 </body>
-
 </html>

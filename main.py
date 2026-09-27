@@ -469,7 +469,6 @@ async def dashboard_events(widget_id: int, request: Request, token: str = None,
 
 @app.get("/dashboard/{widget_id}/page", summary="Live dashboard HTML page (authenticated via query param)")
 def dashboard_page(widget_id: int):
-    base = os.environ.get("PUBLIC_BASE_URL", "http://127.0.0.1:8003").rstrip("/")
     return HTMLResponse(
         content=f"""<!DOCTYPE html>
 <html lang="en">
@@ -478,54 +477,116 @@ def dashboard_page(widget_id: int):
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Live Dashboard — Widget {widget_id}</title>
 <style>
-  * {{ margin:0; padding:0; box-sizing:border-box; }}
-  body {{ font-family:system-ui,sans-serif; background:#f5f5f5; padding:20px; }}
-  h1 {{ font-size:1.4rem; margin-bottom:16px; }}
-  .stats {{ display:flex; gap:12px; margin-bottom:20px; }}
-  .stat {{ background:#fff; border:1px solid #ddd; border-radius:8px; padding:16px 24px; text-align:center; }}
-  .stat .num {{ font-size:2rem; font-weight:700; color:#2563eb; }}
-  .stat .label {{ font-size:0.85rem; color:#666; margin-top:4px; }}
-  .status {{ font-size:0.8rem; margin-bottom:12px; }}
-  .status .dot {{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:4px; }}
-  .status .dot.green {{ background:#16a34a; }}
-  .status .dot.red {{ background:#dc2626; }}
-  table {{ width:100%; border-collapse:collapse; background:#fff; border:1px solid #ddd; border-radius:8px; overflow:hidden; }}
-  th {{ background:#f0f0f0; text-align:left; padding:10px 12px; font-size:0.85rem; border-bottom:1px solid #ddd; }}
-  td {{ padding:10px 12px; border-bottom:1px solid #eee; font-size:0.85rem; }}
-  tr.new {{ animation: flash 1s ease; }}
-  @keyframes flash {{ 0%{{background:#dbeafe}} 100%{{background:#fff}} }}
-  .empty {{ text-align:center; padding:40px; color:#999; }}
-  input {{ padding:6px 10px; border:1px solid #ccc; border-radius:4px; margin-right:8px; }}
-  button {{ padding:6px 14px; background:#2563eb; color:#fff; border:none; border-radius:4px; cursor:pointer; }}
-  button:hover {{ background:#1d4ed8; }}
+  *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+         background: #f0f2f5; color: #1a202c; min-height: 100vh; }}
+  .header {{ background: linear-gradient(135deg, #2b6cb0, #2c5282); color: #fff; padding: 24px 20px; }}
+  .header h1 {{ font-size: 1.3rem; font-weight: 600; }}
+  .header .sub {{ font-size: 0.8rem; opacity: 0.8; margin-top: 4px; }}
+  .wrap {{ max-width: 960px; margin: 0 auto; padding: 24px 16px; }}
+  .auth-bar {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px 20px;
+               display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;
+               box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
+  .auth-bar input {{ flex: 1; min-width: 200px; padding: 8px 12px; border: 1px solid #e2e8f0;
+                     border-radius: 6px; font-size: 13px; outline: none; }}
+  .auth-bar input:focus {{ border-color: #4299e1; box-shadow: 0 0 0 3px rgba(66,153,225,0.12); }}
+  .auth-bar button {{ padding: 8px 18px; border: none; border-radius: 6px; font-size: 13px;
+                      font-weight: 600; cursor: pointer; transition: background 0.15s; }}
+  .btn-primary {{ background: #4299e1; color: #fff; }}
+  .btn-primary:hover {{ background: #3182ce; }}
+  .btn-danger {{ background: #e53e3e; color: #fff; }}
+  .btn-danger:hover {{ background: #c53030; }}
+  .status {{ font-size: 0.78rem; padding: 0 4px; margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }}
+  .dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; }}
+  .dot.green {{ background: #38a169; box-shadow: 0 0 6px rgba(56,161,105,0.4); }}
+  .dot.red {{ background: #e53e3e; }}
+  .dot.gray {{ background: #a0aec0; }}
+  .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-bottom: 20px; }}
+  .stat {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; padding: 18px 16px;
+           text-align: center; box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
+  .stat .num {{ font-size: 1.8rem; font-weight: 700; color: #2b6cb0; line-height: 1; }}
+  .stat .label {{ font-size: 0.75rem; color: #718096; margin-top: 6px; text-transform: uppercase; letter-spacing: 0.5px; }}
+  .table-wrap {{ background: #fff; border: 1px solid #e2e8f0; border-radius: 10px; overflow: hidden;
+                 box-shadow: 0 1px 3px rgba(0,0,0,0.04); }}
+  .table-header {{ padding: 14px 16px; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between;
+                   align-items: center; }}
+  .table-header h2 {{ font-size: 0.95rem; font-weight: 600; color: #2d3748; }}
+  .row-count {{ font-size: 0.75rem; color: #a0aec0; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th {{ text-align: left; padding: 10px 16px; font-size: 0.75rem; font-weight: 600; color: #718096;
+       text-transform: uppercase; letter-spacing: 0.5px; background: #f7fafc; border-bottom: 1px solid #e2e8f0; }}
+  td {{ padding: 10px 16px; font-size: 0.85rem; border-bottom: 1px solid #f0f0f0; }}
+  tr:last-child td {{ border-bottom: none; }}
+  tr.new {{ animation: flash 0.8s ease; }}
+  @keyframes flash {{ 0%{{ background:#ebf8ff; }} 100%{{ background:#fff; }} }}
+  .empty {{ text-align: center; padding: 48px 20px; color: #a0aec0; font-size: 0.9rem; }}
+  .empty .icon {{ font-size: 2rem; margin-bottom: 8px; }}
+  .consent-yes {{ color: #38a169; font-weight: 500; }}
+  .consent-no {{ color: #e53e3e; font-weight: 500; }}
+  @media (max-width: 600px) {{
+    .auth-bar {{ flex-direction: column; }}
+    .auth-bar input {{ min-width: auto; width: 100%; }}
+    table {{ font-size: 0.8rem; }}
+    th, td {{ padding: 8px 10px; }}
+  }}
 </style>
 </head>
 <body>
-<h1>Live Dashboard — Widget {widget_id}</h1>
-<div>
-  <label>Token: <input id="token" type="password" placeholder="paste Supabase JWT" size="40"></label>
-  <button onclick="connect()">Connect</button>
+<div class="header">
+  <h1>Live Dashboard</h1>
+  <div class="sub">Widget #{widget_id} &mdash; Real-time submissions via SSE</div>
 </div>
-<div class="status" id="status"></div>
-<div class="stats">
-  <div class="stat"><div class="num" id="total">-</div><div class="label">Total</div></div>
-  <div class="stat"><div class="num" id="today">-</div><div class="label">Today</div></div>
-  <div class="stat"><div class="num" id="connected-clients">-</div><div class="label">Live Viewers</div></div>
+<div class="wrap">
+  <div class="auth-bar">
+    <input id="token" type="password" placeholder="Paste your Supabase auth token...">
+    <button class="btn-primary" onclick="connect()" id="connectBtn">Connect</button>
+    <button class="btn-danger" onclick="disconnect()" style="display:none" id="disconnectBtn">Disconnect</button>
+  </div>
+  <div class="status" id="status"><span class="dot gray"></span> Not connected</div>
+  <div class="stats">
+    <div class="stat"><div class="num" id="total">-</div><div class="label">Total</div></div>
+    <div class="stat"><div class="num" id="today">-</div><div class="label">Today</div></div>
+    <div class="stat"><div class="num" id="confirmed">-</div><div class="label">Confirmed</div></div>
+  </div>
+  <div class="table-wrap">
+    <div class="table-header">
+      <h2>Recent Submissions</h2>
+      <span class="row-count" id="rowCount">0 rows</span>
+    </div>
+    <table>
+      <thead><tr><th>ID</th><th>Email</th><th>Country</th><th>Consent</th><th>Time</th></tr></thead>
+      <tbody id="feed"><tr><td colspan="5" class="empty"><div class="icon">&#128202;</div>Connect to see live submissions</td></tr></tbody>
+    </table>
+  </div>
 </div>
-<table>
-  <thead><tr><th>ID</th><th>Email</th><th>Country</th><th>Consent</th><th>Time</th></tr></thead>
-  <tbody id="feed"><tr><td colspan="5" class="empty">Connect to see live submissions...</td></tr></tbody>
-</table>
 <script>
 var evtSource = null;
+var MAX_ROWS = 100;
+var savedToken = localStorage.getItem('dashboard_token_{widget_id}');
+if (savedToken) {{
+  document.getElementById('token').value = savedToken;
+}}
+
+function setStatus(html) {{
+  document.getElementById('status').innerHTML = html;
+}}
+
 function connect() {{
   var token = document.getElementById('token').value.trim();
   if (!token) {{ alert('Paste your auth token'); return; }}
+  localStorage.setItem('dashboard_token_{widget_id}', token);
   if (evtSource) evtSource.close();
-  document.getElementById('status').innerHTML = '<span class="dot green"></span> Connecting...';
+  setStatus('<span class="dot gray"></span> Connecting...');
+  document.getElementById('connectBtn').textContent = 'Connecting...';
+  document.getElementById('connectBtn').disabled = true;
+
   evtSource = new EventSource('/dashboard/{widget_id}/events?token=' + encodeURIComponent(token));
   evtSource.onopen = function() {{
-    document.getElementById('status').innerHTML = '<span class="dot green"></span> Connected — listening for new submissions';
+    setStatus('<span class="dot green"></span> Connected &mdash; listening for new submissions');
+    document.getElementById('connectBtn').style.display = 'none';
+    document.getElementById('disconnectBtn').style.display = '';
+    document.getElementById('connectBtn').disabled = false;
+    document.getElementById('connectBtn').textContent = 'Connect';
     loadStats(token);
   }};
   evtSource.addEventListener('new_submission', function(e) {{
@@ -534,17 +595,56 @@ function connect() {{
     loadStats(token);
   }});
   evtSource.onerror = function() {{
-    document.getElementById('status').innerHTML = '<span class="dot red"></span> Disconnected — click Connect to retry';
+    setStatus('<span class="dot red"></span> Disconnected &mdash; click Connect to retry');
+    document.getElementById('connectBtn').style.display = '';
+    document.getElementById('disconnectBtn').style.display = 'none';
+    document.getElementById('connectBtn').textContent = 'Connect';
+    document.getElementById('connectBtn').disabled = false;
   }};
 }}
+
+function disconnect() {{
+  if (evtSource) {{ evtSource.close(); evtSource = null; }}
+  setStatus('<span class="dot gray"></span> Disconnected');
+  document.getElementById('connectBtn').style.display = '';
+  document.getElementById('disconnectBtn').style.display = 'none';
+}}
+
+function escapeHtml(str) {{
+  var div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}}
+
 function addRow(sub) {{
   var tbody = document.getElementById('feed');
   if (tbody.querySelector('.empty')) tbody.innerHTML = '';
   var tr = document.createElement('tr');
   tr.className = 'new';
-  tr.innerHTML = '<td>'+sub.id+'</td><td>'+(sub.data.email||'-')+'</td><td>'+(sub.country||'-')+'</td><td>'+(sub.consent_given?'Yes':'No')+'</td><td>'+new Date(sub.created_at).toLocaleTimeString()+'</td>';
+  var td1 = document.createElement('td');
+  td1.textContent = sub.id;
+  var td2 = document.createElement('td');
+  td2.textContent = (sub.data && sub.data.email) ? sub.data.email : '-';
+  var td3 = document.createElement('td');
+  td3.textContent = sub.country || '-';
+  var td4 = document.createElement('td');
+  td4.className = sub.consent_given ? 'consent-yes' : 'consent-no';
+  td4.textContent = sub.consent_given ? 'Yes' : 'No';
+  var td5 = document.createElement('td');
+  td5.textContent = new Date(sub.created_at).toLocaleTimeString();
+  tr.appendChild(td1);
+  tr.appendChild(td2);
+  tr.appendChild(td3);
+  tr.appendChild(td4);
+  tr.appendChild(td5);
   tbody.insertBefore(tr, tbody.firstChild);
+  var rows = tbody.querySelectorAll('tr').length;
+  document.getElementById('rowCount').textContent = rows + ' row' + (rows !== 1 ? 's' : '');
+  while (tbody.children.length > MAX_ROWS) {{
+    tbody.removeChild(tbody.lastChild);
+  }}
 }}
+
 function loadStats(token) {{
   fetch('/dashboard/{widget_id}/stats', {{headers:{{'Authorization':'Bearer '+token}}}})
     .then(function(r) {{ return r.json(); }})
@@ -553,7 +653,10 @@ function loadStats(token) {{
       var today = new Date().toISOString().slice(0,10);
       var todayEntry = s.by_day.find(function(d){{ return d.day === today; }});
       document.getElementById('today').textContent = todayEntry ? todayEntry.count : 0;
-    }}).catch(function(){{}});
+      document.getElementById('confirmed').textContent = s.confirmed_count || '-';
+    }}).catch(function() {{
+      document.getElementById('total').textContent = '!';
+    }});
 }}
 </script>
 </body>
